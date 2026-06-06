@@ -1,101 +1,121 @@
-# bulk-delete-domains
+# single-domain-check
 
-ลบโดเมน (addon/parked) บน cPanel/WHM แบบหลายตัวพร้อมกัน โดยดึงรายชื่อจากไฟล์ CSV บน GitHub — มี **dry-run + ยืนยัน YES** ก่อนลบจริง เพื่อความปลอดภัย
+ตรวจสุขภาพ **plugin + theme** ของ WordPress แบบ **เจาะจงโดเมน** ด้วย PHP CLI รันตรงจาก GitHub
 
-ใช้ลบโดเมนที่หมดอายุ/เลิกใช้ ทีละหลายตัว โดยไม่ต้องแก้ไฟล์บนเครื่องทุกครั้ง แค่แก้ CSV ที่เดียวบน GitHub
+ใช้เช็คซ้ำทีละเว็บ — เอาโดเมนที่มีปัญหาจากการสแกนทั้งเซิร์ฟเวอร์ มายืนยันก่อนลงมือแก้ และเช็คซ้ำหลังแก้เสร็จว่าหายดีแล้ว
 
-> ⚠️ **คำเตือน:** สคริปต์นี้ลบโดเมนถาวรผ่าน `whmapi1 delete_domain` กู้คืนไม่ได้ ใช้ด้วยความระมัดระวังสูงสุด
+> อ่านอย่างเดียว 100% ไม่ลบ ไม่แก้ ไม่ย้ายไฟล์ — ปลอดภัย รันกี่ครั้งก็ได้
+> ชุดเครื่องมือเดียวกัน: สแกนทั้งเซิร์ฟเวอร์ใช้ `plugin-health` / `theme-health` (คนละ repo) — ตัวนี้เจาะตรวจทีละโดเมน
 
-## ความปลอดภัย (จุดเด่น)
+## คุณสมบัติ
 
-- **Dry-run อัตโนมัติ** — แสดงรายชื่อทุกโดเมนที่จะลบ + เช็คว่ามีจริงในเครื่องไหม ก่อนลบเสมอ
-- **ต้องพิมพ์ YES (ตัวใหญ่) ยืนยัน** ก่อนลบจริง
-- เช็ค CPU load ก่อนลบแต่ละตัว (มี timeout กันค้าง)
-- บันทึก log ทุกการกระทำ
-- ลบ subdomain artifact ที่ค้าง (เช่น `bbb.com.gonext02.com`) อัตโนมัติ
+- **เจาะตรวจโดเมนที่ระบุ** ไม่ต้องสแกนทั้ง 7,000+ เว็บ — เร็ว เหมาะกับเช็คซ้ำ
+- รับชื่อโดเมนได้ **2 แบบ**:
+  - พิมพ์ชื่อตรง ๆ ทีละตัวหรือหลายตัว
+  - ดึงรายชื่อจากไฟล์ **CSV บน GitHub** (คอลัมน์ `domain`, `cpanel_user`)
+- ใช้ `cpanel_user` จาก CSV ช่วยหา path ตรง ๆ (ไปที่ `/home/<user>/`) → เร็วกว่าค้นทั้งเครื่อง
+- ตรวจทั้ง plugin + theme (ค่าเริ่มต้น) หรือเลือกเฉพาะอย่างด้วย `--plugins` / `--themes`
+- ใช้เกณฑ์เดียวกับสคริปต์สแกนหลัก (theme แยก parent/child/ทั่วไป)
 
-## รูปแบบ CSV
+## เกณฑ์การตรวจ
 
-ไฟล์ `delete-list.csv` มี 2 คอลัมน์:
+**ปลั๊กอิน:** ว่าง! (0 ไฟล์) / สงสัย (≤3) / ไม่มีหลัก (ไม่มี .php ที่มี Plugin Name) / ปกติ
 
-```
-domain,parent
-bbb.com,gonext02.com
-amba98.net,gonext02.com
-royalwynn.net,gonext02.com
-```
-
-- **domain** = โดเมนที่จะลบ
-- **parent** = โดเมนหลักของบัญชี cPanel (ใช้ตามลบ subdomain artifact ที่ค้าง เช่น `bbb.com.gonext02.com`)
-
-> การลบใช้ชื่อโดเมนอย่างเดียว (WHM รู้เองว่าอยู่บัญชีไหน) — `parent` จำเป็นเฉพาะตอนตามเก็บ artifact ที่ค้างในหน้า Domains
+**ธีม (แยกตามชนิด):**
+| ชนิดธีม | เกณฑ์ "สงสัย" |
+|---|---|
+| blocksy (parent) | ขาดไฟล์หลัก (style.css/index.php/functions.php) หรือไฟล์ ≤ 50 |
+| blocksy-child | ไฟล์ ≤ 2 |
+| ธีมทั่วไป | ไฟล์ ≤ 10 |
 
 ## วิธีใช้
 
 ```bash
-# ตั้งตัวแปร URL ของ CSV
-LIST='https://raw.githubusercontent.com/ufavisionseoteam19/bulk-delete-domains/main/delete-list.csv'
+URL='https://raw.githubusercontent.com/ufavisionseoteam19/single-domain-check/main/domain-check.php'
 
-# รันสคริปต์ (จะ dry-run + ถาม YES ก่อนลบ)
-bash <(curl -s "https://raw.githubusercontent.com/ufavisionseoteam19/bulk-delete-domains/main/bulk-delete.sh") --list="$LIST?v=$(date +%s)"
+# เช็คโดเมนเดียว (plugin + theme)
+curl -s "$URL?v=$(date +%s)" | php -- mcm5699.com
+
+# เช็คหลายโดเมนพร้อมกัน
+curl -s "$URL?v=$(date +%s)" | php -- mcm5699.com naza99.biz fast3699.com
+
+# เฉพาะ plugin / เฉพาะ theme
+curl -s "$URL?v=$(date +%s)" | php -- --plugins mcm5699.com
+curl -s "$URL?v=$(date +%s)" | php -- --themes mcm5699.com
+
+# แสดงเฉพาะที่มีปัญหา
+curl -s "$URL?v=$(date +%s)" | php -- --only-issues mcm5699.com
 ```
 
-> `?v=$(date +%s)` กัน cache GitHub ให้ได้ CSV ล่าสุดเสมอ
+### ดึงรายชื่อจาก CSV บน GitHub
 
-### ขั้นตอนการทำงาน
+ไฟล์ `check-domains-list.csv` บน repo (รูปแบบ):
+```
+domain,cpanel_user
+allure369.biz,gonext02
+amb44king.pro,gonext02
+betax888.net,gonext02
+```
 
-1. แก้ `delete-list.csv` บน GitHub ใส่โดเมนที่จะลบ + parent
-2. รันคำสั่งด้านบน
-3. สคริปต์แสดง **dry-run** — รายชื่อทั้งหมด + สถานะ (มีอยู่/ไม่พบ)
-4. ตรวจรายชื่อให้แน่ใจ แล้วพิมพ์ **YES** ยืนยัน
-5. ลบจริง + แสดงผล + บันทึก log
+แล้วรัน:
+```bash
+URL='https://raw.githubusercontent.com/ufavisionseoteam19/single-domain-check/main/domain-check.php'
+LIST='https://raw.githubusercontent.com/ufavisionseoteam19/single-domain-check/main/check-domains-list.csv'
+curl -s "$URL?v=$(date +%s)" | php -- --list="$LIST?v=$(date +%s)" --only-issues
+```
 
-## Flags
+> คอลัมน์ `cpanel_user` ไม่บังคับ แต่ถ้าใส่จะหา path เร็วขึ้นมาก (ไม่ต้องค้นทั้งเครื่อง)
+> `?v=$(date +%s)` ต่อท้าย URL เพื่อกัน cache GitHub ให้ได้ไฟล์ล่าสุดเสมอ
+
+## ตัวเลือก (Flags)
 
 | Flag | ความหมาย | ค่าเริ่มต้น |
 |---|---|---|
-| `--list=URL` | ดึง CSV จาก URL | - |
-| `--file=PATH` | อ่าน CSV จากไฟล์ในเครื่อง | - |
-| `--max-load=N` | CPU load limit | 10 |
-| `--yes` | ข้ามการถาม YES (อันตราย — ใช้เฉพาะ automation) | ถาม |
+| `--plugins` | ตรวจเฉพาะ plugins | ตรวจทั้งคู่ |
+| `--themes` | ตรวจเฉพาะ themes | ตรวจทั้งคู่ |
+| `--list=URL` | ดึงรายชื่อโดเมนจาก CSV | - |
+| `--base=PATH` | เปลี่ยนโฟลเดอร์ฐาน | /home |
+| `--only-issues` | แสดงเฉพาะตัวมีปัญหา | แสดงทั้งหมด |
 
-> ต้องระบุ `--list` หรือ `--file` อย่างใดอย่างหนึ่ง
+> อาร์กิวเมนต์ที่ไม่ขึ้นต้นด้วย `--` ถือเป็นชื่อโดเมน (ใส่ได้หลายตัว)
 
-## ตัวอย่าง Dry-run
+## ตัวอย่างผลลัพธ์
 
 ```
-========================================================
-   🔍 DRY-RUN — ตรวจรายชื่อก่อนลบ (ยังไม่ลบ)
-========================================================
-   จำนวนโดเมนใน CSV : 3
-   Load Limit       : 10.0
---------------------------------------------------------
-   #    โดเมน              สถานะ        บัญชี(parent)
-   1    bbb.com            มีอยู่        gonext02.com
-   2    amba98.net         มีอยู่        gonext02.com
-   3    notexist.com       ไม่พบ         gonext02.com
---------------------------------------------------------
-   มีอยู่จริง (จะถูกลบ): 2
-   ไม่พบ (จะข้าม)     : 1
-========================================================
-⚠️  การลบเป็นการถาวร กู้คืนไม่ได้!
-พิมพ์ YES (ตัวใหญ่) เพื่อยืนยันลบ 2 โดเมน:
+#######################################################
+# โดเมน: allure369.biz  (บัญชี: gonext02)
+#######################################################
+
+  ที่ตั้ง: /home/gonext02/allure369.biz
+    [PLUGIN]
+    สถานะ        ไฟล์    ขนาด      ชื่อ
+    ว่าง!        0       0B        blocksy-companion-pro
+    [THEME]
+    สถานะ        ไฟล์    ขนาด      ชื่อ
+    (ไม่พบปัญหา)
 ```
 
-## เกี่ยวกับ Apache/LiteSpeed error
+## Workflow แนะนำ
 
-ถ้าเจอ error แบบ `httpd_ls_bak: Syntax error ... No matches for the wildcard '*.conf'` ระหว่างลบ — เป็น config ค้างของโดเมนเก่าที่ลบไปแล้ว **ไม่ทำให้การลบล้มเหลว** (โดเมนยังขึ้น Success) แต่ควรเคลียร์ config ค้างแยกต่างหากเพื่อไม่ให้สะสม
+1. สแกนทั้งเซิร์ฟเวอร์ด้วย `plugin-health` / `theme-health` → ได้รายชื่อโดเมนมีปัญหา
+2. ใส่รายชื่อ + บัญชี cPanel ลงไฟล์ `check-domains-list.csv` บน repo นี้
+3. รัน `domain-check.php --list=...` เช็คซ้ำยืนยันปัญหา **ก่อน** ลงมือแก้
+4. แก้ไขเว็บ
+5. รัน `--list` ซ้ำอีกครั้ง ยืนยันว่าแก้แล้วขึ้น "ไม่พบปัญหา"
 
-## ข้อควรระวังด้านความปลอดภัย
+## หยุดสคริปต์ (กรณีฉุกเฉิน)
 
-- สคริปต์นี้ **ลบถาวร** — ตรวจ dry-run ทุกครั้งก่อนพิมพ์ YES
-- `bash <(curl ...)` รันโค้ดจาก GitHub ทันที — repo ควรเป็น **private** หรือดูแลสิทธิ์เข้าถึงอย่างเข้มงวด (ต่างจากสคริปต์ตรวจสุขภาพที่ read-only)
-- ตรวจว่า CSV ถูกต้องก่อนรัน — โดเมนผิดตัว = ลบผิดเว็บ
-- หลีกเลี่ยง `--yes` เว้นแต่มั่นใจจริง ๆ
-- สำรองข้อมูล/backup ก่อนลบ เผื่อต้องกู้คืน
+```bash
+pkill -f domain-check
+```
+
+## ความปลอดภัย
+
+- read-only ไม่มีคำสั่งเขียน/ลบ/แก้ไฟล์เว็บ
+- `--list` ดึง CSV จาก URL ที่ระบุเท่านั้น (ควรเป็น repo ของคุณเอง)
 
 ## ข้อกำหนด
 
-- cPanel/WHM (มีคำสั่ง `whmapi1`)
-- `bc`, `curl` (ปกติมีอยู่แล้ว)
-- รันด้วย root
+- PHP CLI (ทดสอบบน PHP 8.3 ใช้ได้ตั้งแต่ PHP 7.x)
+- ต้องเปิด allow_url_fopen เพื่อใช้ `--list` ดึง CSV (ปกติเปิดอยู่แล้ว)
+- สิทธิ์อ่านโฟลเดอร์เว็บ (ปกติใช้ root)
