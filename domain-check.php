@@ -75,7 +75,7 @@ if ($LIST_URL !== null) {
     $di = 0; $ui = 1;  // ตำแหน่งคอลัมน์ domain, cpanel_user (ค่าเริ่มต้น)
     foreach ($lines as $i => $line) {
         if (trim($line) === '') continue;
-        $cols = str_getcsv($line);
+        $cols = str_getcsv($line, ',', '"', '\\');
         // บรรทัดแรกเป็น header → หาตำแหน่งคอลัมน์
         if ($header === null) {
             $header = array_map('strtolower', array_map('trim', $cols));
@@ -173,10 +173,15 @@ function read_site_errorlog($site_dir, $log_days) {
         if (preg_match('/\[(\d{2})-([A-Za-z]{3})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/', $ln, $m)) {
             $t = gmmktime((int)$m[4],(int)$m[5],(int)$m[6], $months[$m[2]]??1, (int)$m[1], (int)$m[3]);
             if ($t >= $cutoff) {
+                // ดึงชื่อปลั๊กอิน/ธีมต้นเหตุจาก path ในบรรทัด (ก่อนตัดข้อความ)
+                $source = '';
+                if (preg_match('#/(plugins|themes)/([^/]+)/#', $ln, $pm)) {
+                    $source = "{$pm[1]}/{$pm[2]}";
+                }
                 $s = preg_replace('/^\[[^\]]+\]\s*/', '', $ln);
                 if (preg_match('/(Uncaught .*?)(?: in |$)/', $s, $mm)) $s = $mm[1];
                 if (strlen($s) > 100) $s = substr($s, 0, 100) . '...';
-                $last = ['time'=>$t, 'msg'=>trim($s)]; $cnt++;
+                $last = ['time'=>$t, 'msg'=>trim($s), 'source'=>$source]; $cnt++;
             }
         }
     }
@@ -300,6 +305,7 @@ foreach ($DOMAINS as $entry) {
                 $flag = ($age_h <= $FRESH_HOURS) ? '[ยังพังอยู่]' : '[อาจแก้แล้ว]';
                 $thai = gmdate('Y-m-d H:i', $err['time'] + $TZ*3600) . " (+$TZ)";
                 echo "    $flag  เวลาล่าสุด: $thai  (เกิด {$err['count']}+ ครั้ง)\n";
+                if (!empty($err['source'])) echo "    ต้นเหตุ: {$err['source']}\n";
                 echo "    สาเหตุ: {$err['msg']}\n";
             }
         }
