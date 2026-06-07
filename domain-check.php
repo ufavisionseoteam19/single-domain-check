@@ -150,33 +150,6 @@ function missing_core_files($dir) {
     return $m;
 }
 
-/** เช็คความสมบูรณ์ลึก: ปลั๊กอิน/ธีมที่มี composer autoload แต่โฟลเดอร์ vendor หาย
- *  จับเคสไฟล์ลึกหาย (เช่น better-wp-security ขาด core/Contracts)
- *  คืนค่า: ข้อความเตือนถ้าเจอความผิดปกติลึก, '' ถ้าปกติ */
-function deep_check($dir) {
-    // 1. มี composer.json/autoload แต่ไม่มีโฟลเดอร์ vendor = autoload พัง
-    $has_composer = is_file("$dir/composer.json")
-                 || is_file("$dir/vendor/autoload.php")
-                 || is_dir("$dir/vendor-prod");
-    if ($has_composer) {
-        $has_vendor = is_dir("$dir/vendor") || is_dir("$dir/vendor-prod");
-        if (!$has_vendor) return 'vendor หาย (composer autoload พัง)';
-        // มี vendor แต่ไม่มี autoload.php
-        if (is_dir("$dir/vendor") && !is_file("$dir/vendor/autoload.php")
-            && !is_file("$dir/vendor/composer/autoload_real.php")) {
-            return 'vendor/autoload หาย';
-        }
-    }
-    // 2. โฟลเดอร์ core/ ที่ประกาศไว้แต่ว่างเปล่า (เช่น better-wp-security/core)
-    foreach (['core', 'includes', 'inc', 'src'] as $sub) {
-        if (is_dir("$dir/$sub")) {
-            $cnt = @count(glob("$dir/$sub/*") ?: []);
-            if ($cnt === 0) return "$sub/ ว่างเปล่า";
-        }
-    }
-    return '';
-}
-
 /** อ่าน error_log ของเว็บ หา Fatal error ล่าสุด
  *  $site_dir = โฟลเดอร์เว็บ (มี error_log อยู่ข้างใน)
  *  คืนค่า: array [time, msg, count] หรือ null ถ้าไม่มี */
@@ -307,12 +280,6 @@ foreach ($DOMAINS as $entry) {
                     elseif ($fcount <= $PLUGIN_TH) $status = 'สงสัย';
                     elseif (!has_header($d,'plugin')) $status = 'ไม่มีหลัก';
                     else $status = 'ปกติ';
-                }
-
-                // เช็คลึก: ถ้าสถานะยัง "ปกติ" แต่ vendor/core หาย = ตั้งธงใหม่
-                if ($status === 'ปกติ') {
-                    $deep = deep_check($d);
-                    if ($deep !== '') $status = "ผิดลึก:$deep";
                 }
 
                 if ($status !== 'ปกติ') $found_issue = true;
