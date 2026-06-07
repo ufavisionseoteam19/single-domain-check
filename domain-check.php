@@ -42,6 +42,10 @@ $CHILD_NAME  = 'blocksy-child';
 $CHILD_MIN   = 2;
 $PARENT_NAME = 'blocksy';
 $PARENT_MIN  = 50;
+$DO_ERRLOG   = true;   // อ่าน error_log ของโดเมนด้วย
+$LOG_DAYS    = 7;      // error log ย้อนหลังกี่วัน
+$FRESH_HOURS = 6;      // error ใน N ชม. = ยังพังอยู่
+$TZ          = 7;
 
 // ====== อ่าน argument ======
 global $argv;
@@ -51,6 +55,8 @@ foreach (array_slice($argv, 1) as $a) {
     elseif ($a === '--only-issues'){ $ONLY_ISSUES = true; }
     elseif (strpos($a, '--base=') === 0) { $BASE = substr($a, 7); }
     elseif (strpos($a, '--list=') === 0) { $LIST_URL = substr($a, 7); }
+    elseif ($a === '--no-errorlog') { $DO_ERRLOG = false; }
+    elseif (strpos($a, '--log-days=') === 0) { $LOG_DAYS = max(1,(int)substr($a, 11)); }
     elseif (strpos($a, '--') === 0) { /* ไม่รู้จัก ข้าม */ }
     else { $DOMAINS[] = ['domain' => $a, 'user' => null]; }  // พิมพ์ตรง = ไม่รู้ user
 }
@@ -142,6 +148,68 @@ function missing_core_files($dir) {
     $m = [];
     foreach ($req as $f) { if (!is_file("$dir/$f")) $m[] = $f; }
     return $m;
+}
+
+/** เช็คความสมบูรณ์ลึก: ปลั๊กอิน/ธีมที่มี composer autoload แต่โฟลเดอร์ vendor หาย
+ *  จับเคสไฟล์ลึกหาย (เช่น better-wp-security ขาด core/Contracts)
+ *  คืนค่า: ข้อความเตือนถ้าเจอความผิดปกติลึก, '' ถ้าปกติ */
+function deep_check($dir) {
+    // 1. มี composer.json/autoload แต่ไม่มีโฟลเดอร์ vendor = autoload พัง
+    $has_composer = is_file("$dir/composer.json")
+                 || is_file("$dir/vendor/autoload.php")
+                 || is_dir("$dir/vendor-prod");
+    if ($has_composer) {
+        $has_vendor = is_dir("$dir/vendor") || is_dir("$dir/vendor-prod");
+        if (!$has_vendor) return 'vendor หาย (composer autoload พัง)';
+        // มี vendor แต่ไม่มี autoload.php
+        if (is_dir("$dir/vendor") && !is_file("$dir/vendor/autoload.php")
+            && !is_file("$dir/vendor/composer/autoload_real.php")) {
+            return 'vendor/autoload หาย';
+        }
+    }
+    // 2. โฟลเดอร์ core/ ที่ประกาศไว้แต่ว่างเปล่า (เช่น better-wp-security/core)
+    foreach (['core', 'includes', 'inc', 'src'] as $sub) {
+        if (is_dir("$dir/$sub")) {
+            $cnt = @count(glob("$dir/$sub/*") ?: []);
+            if ($cnt === 0) return "$sub/ ว่างเปล่า";
+        }
+    }
+    return '';
+}
+
+/** อ่าน error_log ของเว็บ หา Fatal error ล่าสุด
+ *  $site_dir = โฟลเดอร์เว็บ (มี error_log อยู่ข้างใน)
+ *  คืนค่า: array [time, msg, count] หรือ null ถ้าไม่มี */
+function read_site_errorlog($site_dir, $log_days) {
+    $log = "$site_dir/error_log";
+    if (!is_file($log)) return null;
+    $cutoff = time() - ($log_days * 86400);
+    // อ่านท้ายไฟล์ 16KB
+    $size = @filesize($log);
+    $fh = @fopen($log, 'rb');
+    if (!$fh) return null;
+    if ($size > 16384) fseek($fh, -16384, SEEK_END);
+    $tail = fread($fh, 16384);
+    fclose($fh);
+
+    $months = ['Jan'=>1,'Feb'=>2,'Mar'=>3,'Apr'=>4,'May'=>5,'Jun'=>6,
+               'Jul'=>7,'Aug'=>8,'Sep'=>9,'Oct'=>10,'Nov'=>11,'Dec'=>12];
+    $last = null; $cnt = 0;
+    foreach (explode("\n", $tail) as $ln) {
+        if (strpos($ln, 'PHP Fatal error') === false) continue;
+        if (preg_match('/\[(\d{2})-([A-Za-z]{3})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/', $ln, $m)) {
+            $t = gmmktime((int)$m[4],(int)$m[5],(int)$m[6], $months[$m[2]]??1, (int)$m[1], (int)$m[3]);
+            if ($t >= $cutoff) {
+                $s = preg_replace('/^\[[^\]]+\]\s*/', '', $ln);
+                if (preg_match('/(Uncaught .*?)(?: in |$)/', $s, $mm)) $s = $mm[1];
+                if (strlen($s) > 100) $s = substr($s, 0, 100) . '...';
+                $last = ['time'=>$t, 'msg'=>trim($s)]; $cnt++;
+            }
+        }
+    }
+    if ($last === null) return null;
+    $last['count'] = $cnt;
+    return $last;
 }
 
 /** หา wp-content ของโดเมนที่ระบุ — ค้นจาก path ที่มีชื่อโดเมน
@@ -241,11 +309,32 @@ foreach ($DOMAINS as $entry) {
                     else $status = 'ปกติ';
                 }
 
+                // เช็คลึก: ถ้าสถานะยัง "ปกติ" แต่ vendor/core หาย = ตั้งธงใหม่
+                if ($status === 'ปกติ') {
+                    $deep = deep_check($d);
+                    if ($deep !== '') $status = "ผิดลึก:$deep";
+                }
+
                 if ($status !== 'ปกติ') $found_issue = true;
                 if ($ONLY_ISSUES && $status === 'ปกติ') continue;
                 printf("    %-12s %-7s %-9s %s\n", $status, $fcount, $size, $name);
             }
-            if ($ONLY_ISSUES && !$found_issue) echo "    (ไม่พบปัญหา)\n";
+            if ($ONLY_ISSUES && !$found_issue) echo "    (ไม่พบปัญหาจากการนับไฟล์)\n";
+        }
+
+        // อ่าน error_log ของเว็บนี้ (จับเคสไฟล์ลึกหายที่นับไฟล์มองไม่เห็น)
+        if ($DO_ERRLOG) {
+            $err = read_site_errorlog($site, $LOG_DAYS);
+            echo "    [ERROR LOG]\n";
+            if ($err === null) {
+                echo "    ไม่พบ Fatal error ใน $LOG_DAYS วันล่าสุด (หรือไม่มีไฟล์ error_log)\n";
+            } else {
+                $age_h = (time() - $err['time']) / 3600;
+                $flag = ($age_h <= $FRESH_HOURS) ? '[ยังพังอยู่]' : '[อาจแก้แล้ว]';
+                $thai = gmdate('Y-m-d H:i', $err['time'] + $TZ*3600) . " (+$TZ)";
+                echo "    $flag  เวลาล่าสุด: $thai  (เกิด {$err['count']}+ ครั้ง)\n";
+                echo "    สาเหตุ: {$err['msg']}\n";
+            }
         }
         echo "\n";
     }
