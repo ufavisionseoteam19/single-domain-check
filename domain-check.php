@@ -282,19 +282,49 @@ function deep_scan_wpcontent($root, $domain) {
     return count($exact) > 0 ? $exact : $loose;
 }
 
+/** อ่านทะเบียนโดเมนของ cPanel (/etc/userdatadomains) — รู้ที่ตั้งเว็บทุกโดเมนทันที
+ *  ไม่ต้องไล่ค้นโฟลเดอร์เลย (อ่านอย่างเดียวเหมือนเดิม) */
+function docroots_from_cpanel($domain) {
+    $f = '/etc/userdatadomains';
+    if (!@is_readable($f)) return [];
+    $fh = @fopen($f, 'rb');
+    if (!$fh) return [];
+    $found = [];
+    while (($ln = fgets($fh)) !== false) {
+        if (strpos($ln, $domain . ':') !== 0) continue;
+        $parts = explode('==', $ln);
+        if (isset($parts[4])) {
+            $doc = trim($parts[4]);
+            if ($doc !== '' && is_dir("$doc/wp-content")) $found[] = "$doc/wp-content";
+        }
+    }
+    fclose($fh);
+    return array_values(array_unique($found));
+}
+
 /** หา wp-content ของโดเมนที่ระบุ
- *  ขั้น 1 (เร็ว): เส้นทางมาตรฐานเซิร์ฟเวอร์เรา /home/<บัญชี>/<โดเมน>/wp-content
+ *  ขั้น 0 (เร็วสุด): ถามทะเบียนโดเมนของ cPanel ตรงๆ
+ *  ขั้น 1 (เร็ว): เส้นทางมาตรฐาน /home/<บัญชี>/<โดเมน> และ /home/<บัญชี>/public_html/<โดเมน>
  *  ขั้น 2 (ช้า): ไล่ค้นทีละบัญชี พร้อมแสดงความคืบหน้าทางจอ (STDERR)
  *               เจอแล้วหยุดทันที ไม่ค้นบัญชีที่เหลือต่อให้เสียเวลา */
 function find_domain_wpcontent($base, $domain, $user = null) {
+    $reg = docroots_from_cpanel($domain);
+    if (count($reg) > 0) return $reg;
+
     if ($user !== null && is_dir("$base/$user")) {
-        $p = "$base/$user/$domain/wp-content";
-        if (is_dir($p)) return [$p];
+        $cands = [
+            "$base/$user/$domain/wp-content",
+            "$base/$user/public_html/$domain/wp-content",
+        ];
+        foreach ($cands as $p) { if (is_dir($p)) return [$p]; }
         fwrite(STDERR, "  ไม่เจอที่เส้นทางมาตรฐาน — กำลังค้นทั้งบัญชี $user ...\n");
         return deep_scan_wpcontent("$base/$user", $domain);
     }
 
     $fast = glob("$base/*/$domain/wp-content", GLOB_ONLYDIR) ?: [];
+    if (count($fast) === 0) {
+        $fast = glob("$base/*/public_html/$domain/wp-content", GLOB_ONLYDIR) ?: [];
+    }
     if (count($fast) > 0) return $fast;
 
     $accounts = glob("$base/*", GLOB_ONLYDIR) ?: [];
